@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, JSON, ForeignKey, Enum, Table
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, JSON, ForeignKey, Enum, UniqueConstraint, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -114,6 +114,10 @@ class Workspace(Base):
 # Contact model
 class Contact(Base):
     __tablename__ = "contacts"
+    __table_args__ = (
+        UniqueConstraint('workspace_id', 'email', name='uq_workspace_email'),
+    )
+    
     id = Column(Integer, primary_key=True, index=True)
     workspace_id = Column(Integer, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False)
     name = Column(String(255), nullable=False)
@@ -189,6 +193,7 @@ class Booking(Base):
     end_time = Column(DateTime, nullable=False)
     status = Column(Enum(BookingStatus), default=BookingStatus.PENDING)
     notes = Column(Text)
+    name = Column(Text)
     cancellation_reason = Column(Text)
     confirmation_sent_at = Column(DateTime)
     reminder_sent_at = Column(DateTime)

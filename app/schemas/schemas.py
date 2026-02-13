@@ -38,6 +38,33 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+# ===== DASHBOARD ANALYTICS =====
+class SevenDayBookingData(BaseModel):
+    day: str
+    date: int
+    count: int
+    is_today: bool
+
+class AnalyticsResponse(BaseModel):
+    today_bookings: int
+    today_bookings_trend: float
+    active_leads_week: int
+    active_leads_week_trend: float
+    active_leads_month: int
+    active_leads_month_trend: float
+    conversion_rate: float
+    conversion_rate_trend: float
+    pending_forms: int
+    pending_forms_trend: float
+    overdue_forms: int
+    completion_rate: float
+    completion_rate_trend: float
+    seven_day_bookings: List[SevenDayBookingData]
+    
+    class Config:
+        from_attributes = True
+
 # ===== WORKSPACE SCHEMAS =====
 class WorkspaceCreate(BaseModel):
     name: str
@@ -74,6 +101,7 @@ class WorkspaceResponse(BaseModel):
     
     class Config:
         from_attributes = True
+        
 
 # ===== CONTACT SCHEMAS =====
 class ContactCreate(BaseModel):
@@ -137,10 +165,10 @@ class ServiceResponse(BaseModel):
 
 # ===== BOOKING SCHEMAS =====
 class BookingCreate(BaseModel):
-    contact_id: Optional[int] = None
     service_id: int
     start_time: datetime
     notes: Optional[str] = None
+    contact_id : Optional[int] = None  # For internal bookings with known contacts
     # For public bookings (no contact_id)
     contact_name: Optional[str] = None
     contact_email: Optional[EmailStr] = None
@@ -219,6 +247,28 @@ class FormSubmissionResponse(BaseModel):
     sent_at: Optional[datetime]
     submitted_at: Optional[datetime]
     created_at: datetime
+    
+    class Config:
+        from_attributes = True
+        
+        
+class FormFieldBase(BaseModel):
+    """Base schema for form field"""
+    label: str
+    field_type: str  # "text", "email", "textarea", "select", "checkbox", etc.
+    required: Optional[bool] = False
+    options: Optional[List[str]] = None  # For select/radio fields
+    placeholder: Optional[str] = None
+    help_text: Optional[str] = None
+
+
+class FormTemplateUpdate(BaseModel):
+    """Schema for updating form template"""
+    name: Optional[str] = None
+    form_type: Optional[str] = None  # "intake", "questionnaire", "consent", "custom"
+    description: Optional[str] = None
+    fields: Optional[List[FormFieldBase]] = None
+    is_active: Optional[bool] = None
     
     class Config:
         from_attributes = True
