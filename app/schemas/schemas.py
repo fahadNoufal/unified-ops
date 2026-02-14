@@ -12,6 +12,36 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: Dict[str, Any]
 
+
+# Onboarding
+
+class OnboardingData(BaseModel):
+    # Basic info
+    name: str
+    businessName: str
+    industry: str
+    
+    # AI Assistant
+    enableAI: bool = False
+    geminiApiKey: Optional[str] = None
+    businessDescription: Optional[str] = None
+    servicesAndPricing: Optional[str] = None
+    bookingAndScheduling: Optional[str] = None
+    policiesAndGuidelines: Optional[str] = None
+    practicalInformation: Optional[str] = None
+    
+    # Combined RAG content (computed from 5 answers)
+    rag_content: Optional[str] = None
+    
+    # Inventory
+    setupInventory: bool = False
+    
+    # Email
+    setupEmail: bool = False
+    emailApiKey: Optional[str] = None
+    senderEmail: Optional[str] = None
+    
+    
 # ===== USER SCHEMAS =====
 class UserBase(BaseModel):
     email: EmailStr
@@ -85,6 +115,11 @@ class WorkspaceUpdate(BaseModel):
     lunch_break: Optional[Dict[str, Any]] = None
     buffer_time_minutes: Optional[int] = None
     max_bookings_per_slot: Optional[int] = None
+    
+    industry: Optional[str] = None  # NEW
+    rag_content: Optional[str] = None  # NEW (for AI)
+    agent_system_prompt: Optional[str] = None  # NEW (for AI)
+    gemini_api_key: Optional[str] = None  # NEW (for AI)
 
 class WorkspaceResponse(BaseModel):
     id: int
@@ -99,8 +134,13 @@ class WorkspaceResponse(BaseModel):
     has_dummy_data: bool
     created_at: datetime
     
+    industry: Optional[str] = None  # NEW
+    has_ai_enabled: Optional[bool] = None  # Computed field
+    
     class Config:
         from_attributes = True
+        
+        
         
 
 # ===== CONTACT SCHEMAS =====

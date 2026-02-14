@@ -12,7 +12,10 @@ from pydantic import BaseModel
 
 from ..core.database import get_db
 from ..models.models import Conversation, Message, Contact, Workspace, MessageChannel
+from app.agents.llm_agent import conversation_agent
+from app.agents.prompts import DEFAULT_SYSTEM_PROMPT
 from app.services.chat_tokens import generate_chat_token, validate_chat_token
+import os
 
 router = APIRouter()
 
@@ -102,13 +105,13 @@ async def get_chat_info(
         Workspace.id == contact.workspace_id
     ).first()
     
-    # Count customer messages (to enforce 50 limit)
+    # Count customer messages (to enforce 14 limit)
     customer_message_count = db.query(func.count(Message.id)).filter(
         Message.conversation_id == conversation_id,
         Message.is_from_customer == True
     ).scalar() or 0
     
-    messages_remaining = max(0, 50 - customer_message_count)
+    messages_remaining = max(0, 14 - customer_message_count)
     
     return {
         "conversation_id": conversation.id,
@@ -166,7 +169,8 @@ async def send_chat_message(
 ):
     """
     Send message from customer to business
-    Enforces 50 message limit per customer
+    Enforces 14 message limit per customer (changed from 50)
+    Triggers AI agent response
     """
     # Validate token
     conversation_id = validate_chat_token(token)
@@ -182,17 +186,18 @@ async def send_chat_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    # Check message limit (50 max per customer)
+    # ========== UPDATED: Changed limit to 14 messages ==========
     customer_message_count = db.query(func.count(Message.id)).filter(
         Message.conversation_id == conversation_id,
         Message.is_from_customer == True
     ).scalar() or 0
     
-    if customer_message_count >= 50:
+    if customer_message_count >= 14:  # Changed from 50
         raise HTTPException(
             status_code=429, 
-            detail="Message limit reached. You have sent the maximum of 50 messages."
+            detail="Message limit reached. You have sent the maximum of 14 messages."
         )
+    # ==========================================================
     
     # Validate content
     if not data.content or not data.content.strip():
@@ -201,37 +206,105 @@ async def send_chat_message(
     if len(data.content) > 2000:
         raise HTTPException(status_code=400, detail="Message too long (max 2000 characters)")
     
-    # Create message
-    message = Message(
+    # Create customer message
+    customer_message = Message(
         conversation_id=conversation_id,
-        sender_id=None,  # No sender_id for public messages
+        sender_id=None,
         content=data.content.strip(),
-        channel=MessageChannel.SYSTEM,  # Or create a new channel type for public chat
+        channel=MessageChannel.SYSTEM,
         is_from_customer=True,
         is_automated=False,
         created_at=datetime.utcnow()
     )
     
-    db.add(message)
+    db.add(customer_message)
     
     # Update conversation
     conversation.last_message_at = datetime.utcnow()
-    conversation.unread_count += 1  # Increment unread for business
+    conversation.unread_count += 1
     
     db.commit()
-    db.refresh(message)
+    db.refresh(customer_message)
     
-    # TODO: Future - Trigger LLM auto-response here
-    # await llm_service.generate_response(conversation_id, message.content)
+    # ========== NEW: TRIGGER AI AGENT ==========
+    try:
+        # Get workspace
+        contact = conversation.contact
+        workspace = db.query(Workspace).filter(
+            Workspace.id == contact.workspace_id
+        ).first()
+        
+        # Get conversation history (last 10 messages)
+        history_messages = db.query(Message).filter(
+            Message.conversation_id == conversation_id
+        ).order_by(Message.created_at.desc()).limit(10).all()
+        
+        history_messages.reverse()  # Oldest first
+        
+        history = [
+            {
+                'content': msg.content,
+                'is_from_customer': msg.is_from_customer,
+                'created_at': msg.created_at.isoformat()
+            }
+            for msg in history_messages
+        ]
+        
+        # Get agent configuration
+        system_prompt = workspace.agent_system_prompt or DEFAULT_SYSTEM_PROMPT
+        rag_content_summary = workspace.rag_content[:500] if workspace.rag_content else "No additional info"
+        gemini_api_key = workspace.gemini_api_key or os.getenv('GEMINI_API_KEY')
+        print(gemini_api_key)
+        
+        # Check if we have API key
+        if not gemini_api_key:
+            print("⚠️ No Gemini API key configured, skipping agent response")
+        else:
+            # Generate agent response
+            agent_response = await conversation_agent.process_message(
+                workspace_id=workspace.id,
+                conversation_id=conversation_id,
+                customer_message=data.content,
+                conversation_history=history,
+                business_name=workspace.name,
+                system_prompt=system_prompt,
+                rag_content_summary=rag_content_summary,
+                gemini_api_key=gemini_api_key,
+                messages_count=customer_message_count + 1
+            )
+            
+            # Save agent response
+            if agent_response:
+                agent_message = Message(
+                    conversation_id=conversation_id,
+                    sender_id=None,
+                    content=agent_response,
+                    channel=MessageChannel.SYSTEM,
+                    is_from_customer=False,
+                    is_automated=True,
+                    created_at=datetime.utcnow()
+                )
+                
+                db.add(agent_message)
+                conversation.last_message_at = datetime.utcnow()
+                db.commit()
+                
+                print(f"🤖 Agent responded: {agent_response[:100]}...")
+                
+    except Exception as e:
+        print(f"❌ Agent error: {str(e)}")
+        # Don't fail the request if agent fails
+        pass
+    # ==========================================
     
     return {
-        "id": message.id,
-        "content": message.content,
-        "is_from_customer": message.is_from_customer,
-        "created_at": message.created_at.isoformat(),
-        "messages_remaining": 50 - (customer_message_count + 1)
+        "id": customer_message.id,
+        "content": customer_message.content,
+        "is_from_customer": customer_message.is_from_customer,
+        "created_at": customer_message.created_at.isoformat(),
+        "messages_remaining": 14 - (customer_message_count + 1)  # Updated
     }
-
+    
 @router.get("/public/chat/{token}/workspace")
 async def get_workspace_branding(
     token: str,

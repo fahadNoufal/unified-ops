@@ -1,6 +1,8 @@
 from pydantic_settings import BaseSettings
 import os
-
+from typing import Optional
+from dotenv import load_dotenv  # Import this
+load_dotenv()
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "Unified Operations Platform"
@@ -22,6 +24,9 @@ class Settings(BaseSettings):
     # Email (Resend)
     RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
     FROM_EMAIL: str = os.getenv("FROM_EMAIL", "noreply@yourapp.com")
+    
+    
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     
     # Frontend URL
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")

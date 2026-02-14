@@ -246,7 +246,7 @@ class DummyDataGenerator:
         services = self.generate_services(db)
         print(f"✓ Created {len(services)} services")
         
-        bookings = self.generate_bookings(db, contacts, services, count=30)
+        bookings = self.generate_bookings(db, contacts, services, count=50)
         print(f"✓ Created {len(bookings)} bookings")
         
         templates = self.generate_form_templates(db)

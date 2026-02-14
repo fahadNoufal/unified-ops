@@ -112,6 +112,7 @@ class Workspace(Base):
     name = Column(String(255), nullable=False)
     slug = Column(String(100), unique=True, index=True, nullable=False)
     business_address = Column(Text)
+    industry = Column(String(100), nullable=True)
     timezone = Column(String(50), default="UTC")
     contact_email = Column(String(255), nullable=False)
     contact_phone = Column(String(50))
@@ -137,6 +138,10 @@ class Workspace(Base):
     inventory_items = relationship("InventoryItem", back_populates="workspace", cascade="all, delete-orphan")
     email_templates = relationship("EmailTemplate", back_populates="workspace", cascade="all, delete-orphan")
     automation_rules = relationship("AutomationRule", back_populates="workspace", cascade="all, delete-orphan")
+    
+    rag_content = Column(Text, nullable=True)
+    agent_system_prompt = Column(Text, nullable=True)
+    gemini_api_key = Column(String(500), nullable=True)
 
 # Contact model
 class Contact(Base):

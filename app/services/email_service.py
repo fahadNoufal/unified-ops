@@ -58,7 +58,8 @@ class EmailService:
                         "from": "onboarding@resend.dev",
                         "to": [to_email],
                         "subject": subject,
-                        "html": html_body
+                        "html": html_body,
+                        'workspace': workspace.id,
                     }
                 )
                 
@@ -125,12 +126,15 @@ class EmailService:
 <html>
 <head>
     <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-        .content { background: #ffffff; padding: 30px; border: 1px solid #e0e0e0; }
-        .button { display: inline-block; padding: 12px 30px; background: #667eea; color: white; text-decoration: none; border-radius: 5px; margin: 10px 5px; }
-        .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f9f9f9; }
+        .container { max-width: 600px; margin: 20px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 40px 20px; text-align: center; }
+        .header h1 { margin: 0; font-size: 24px; font-weight: 600; }
+        .content { padding: 40px 30px; }
+        .button-primary { display: inline-block; padding: 14px 32px; background: #667eea; color: white !important; text-decoration: none; border-radius: 6px; font-weight: bold; margin: 20px 0; text-align: center; }
+        .button-secondary { display: inline-block; padding: 10px 20px; background: #f0f4f8; color: #555 !important; text-decoration: none; border-radius: 6px; font-size: 14px; margin: 10px 0; text-align: center; border: 1px solid #dae1e7; }
+        .footer { background-color: #f1f1f1; text-align: center; padding: 20px; color: #888; font-size: 12px; }
+        p { margin-bottom: 15px; }
     </style>
 </head>
 <body>
@@ -141,30 +145,28 @@ class EmailService:
         <div class="content">
             <p>Hi {{customer_name}},</p>
             
-            <p>Thank you for joining us! We're excited to have you as part of our community.</p>
+            <p>We are absolutely thrilled to welcome you to the <strong>{{business_name}}</strong> family! Thank you for choosing us.</p>
             
-            <p>To get started, please complete your welcome form so we can serve you better:</p>
-            
-            <p style="text-align: center;">
-                <a href="{{welcome_form_url}}" class="button">Complete Welcome Form</a>
-            </p>
-            
-            <p>Or you can book your first appointment right away:</p>
+            <p>We're ready to provide you with the best experience possible. If you're ready to get started, we'd love to see you soon.</p>
             
             <p style="text-align: center;">
-                <a href="{{booking_url}}" class="button">Book Appointment</a>
+                <a href="{{booking_url}}" class="button-primary">Book Your First Appointment</a>
             </p>
             
-            <p>Have any questions? Message us anytime:</p>
+            <hr style="border: 0; border-top: 1px solid #eee; margin: 30px 0;">
+            
+            <p><strong>Have any questions or doubts?</strong></p>
+            <p>We understand that you might have a few questions before diving in. Our team is here to help! Feel free to drop us a message anytime.</p>
 
             <p style="text-align: center;">
-                <a href="{{chat_url}}" class="button">💬 Message Us</a>
+                <a href="{{chat_url}}" class="button-secondary">💬 Message Us</a>
             </p>
             
-            <p>Best regards,<br>The {{business_name}} Team</p>
+            <p style="margin-top: 30px;">Warmly,<br>The {{business_name}} Team</p>
         </div>
         <div class="footer">
             <p>© {{business_name}}. All rights reserved.</p>
+            <p>You received this email because you signed up with {{business_name}}.</p>
         </div>
     </div>
 </body>
@@ -232,7 +234,7 @@ class EmailService:
             
             <p>To help us prepare for your visit, please complete this pre-appointment form:</p>
             
-            <p style="text-align: center;">
+            <p style="text-align: center; color:white;">
                 <a href="{{pre_appointment_form_url}}" class="button">Complete Pre-Appointment Form</a>
             </p>
             

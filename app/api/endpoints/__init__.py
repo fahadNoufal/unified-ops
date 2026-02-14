@@ -4,6 +4,8 @@ All routes in one file for simplicity
 """
 from app.api import analytics_operations
 from app.api import public_chat 
+from app.api import agent_config  # At top
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from app.services.email_service import email_service
@@ -12,6 +14,7 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 import secrets
 import string
+import os
 
 from app.core.database import get_db
 from app.core.auth import (
@@ -35,6 +38,7 @@ router = APIRouter()
 
 router.include_router(analytics_operations.router, tags=["analytics"])
 router.include_router(public_chat.router, tags=["public-chat"])
+router.include_router(agent_config.router, tags=["agent-config"])  # With other routers
 
 # ========== AUTH ENDPOINTS ==========
 
@@ -123,6 +127,33 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 # ========== WORKSPACE ENDPOINTS ==========
 
+@router.post("/onboarding")
+async def complete_onboarding(
+    data: OnboardingData,
+    db: Session = Depends(get_db)
+):
+    # Create workspace
+    workspace = Workspace(
+        name=data.businessName,
+        industry=data.industry,
+        rag_content=data.rag_content if data.enableAI else None,
+        gemini_api_key=data.geminiApiKey if data.enableAI else None,
+        # ... other fields
+    )
+    
+    # If AI enabled and has RAG content, create vector store
+    if data.enableAI and data.rag_content:
+        from app.agents.rag_service import rag_service
+        api_key = data.geminiApiKey or os.getenv('GEMINI_API_KEY')
+        if api_key:
+            rag_service.create_vector_store(
+                workspace_id=workspace.id,
+                business_content=data.rag_content,
+                api_key=api_key
+            )
+    
+    return {"success": True, "workspace_id": workspace.id}
+
 @router.get("/workspaces/me", response_model=WorkspaceResponse)
 async def get_workspace(
     current_user: User = Depends(get_current_user),
@@ -141,16 +172,39 @@ async def update_workspace(
     db: Session = Depends(get_db)
 ):
     """Update workspace"""
-    workspace = db.query(Workspace).filter(Workspace.id == current_user.workspace_id).first()
+    workspace = db.query(Workspace).filter(
+        Workspace.id == current_user.workspace_id
+    ).first()
+    
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
     
+    # Update all provided fields
     for key, value in data.dict(exclude_unset=True).items():
         setattr(workspace, key, value)
     
+    # If rag_content provided and gemini_api_key exists, create vector store
+    if data.rag_content and (data.gemini_api_key or workspace.gemini_api_key):
+        try:
+            from app.agents.rag_service import rag_service
+            import os
+            
+            api_key = data.gemini_api_key or workspace.gemini_api_key or os.getenv('GEMINI_API_KEY')
+            if api_key:
+                rag_service.create_vector_store(
+                    workspace_id=workspace.id,
+                    business_content=data.rag_content,
+                    api_key=api_key
+                )
+                print(f"✓ Created vector store for workspace {workspace.id}")
+        except Exception as e:
+            print(f"⚠️ Failed to create vector store: {str(e)}")
+    
     db.commit()
     db.refresh(workspace)
+    print(workspace.email_api_key)
     return workspace
+
 
 @router.put("/workspace", response_model=WorkspaceResponse)
 async def update_workspace(
@@ -643,7 +697,10 @@ async def create_booking(
             db=db,
             booking=booking,
             contact=contact,
-            workspace=workspace                )
+            workspace=workspace                
+        )
+        
+        print('email send----->>>>')
     except Exception as e:
         print(f"Failed to send booking confirmation: {e}")
     
@@ -959,7 +1016,8 @@ async def send_message(
         await email_service.send_email(
             to_email=contact.email,
             subject=f"Message from {current_user.workspace.name}",
-            body=data.content
+            html_body=data.content,
+            workspace=current_user.workspace
         )
     
     return message
@@ -1275,6 +1333,17 @@ async def submit_public_form(
     db.add(submission)
     db.commit()
     db.refresh(submission)
+    
+    try:
+        
+        await email_service.send_welcome_email(
+            db=db,
+            contact=contact,
+            workspace=workspace
+        )
+        print("Welcome email sent successfully")
+    except Exception as e:
+        print(f"Failed to send welcome email: {e}")
     
     # Optional: Send notification email to workspace owner
     # await email_service.send_form_submission_notification(...)
@@ -1876,6 +1945,17 @@ async def create_public_booking(
     db.add(booking)
     db.commit()
     db.refresh(booking)
+    
+    try:
+        await email_service.send_booking_confirmation(
+            db=db,
+            booking=booking,
+            contact=contact,
+            workspace=workspace                
+        )
+        
+    except Exception as e:
+        print(f"Failed to send booking confirmation: {e}")
     
     # Optional: Trigger automations
     try:
