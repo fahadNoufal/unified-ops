@@ -46,6 +46,33 @@ class EmailTemplateType(str, enum.Enum):
     INVENTORY_ALERT = "inventory_alert"
     STAFF_CREDENTIALS = "staff_credentials"
 
+class EmailLog(Base):
+    __tablename__ = "email_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    workspace_id = Column(Integer, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False)
+    contact_id = Column(Integer, ForeignKey('contacts.id', ondelete='CASCADE'), nullable=False)
+    template_type = Column(String(100), nullable=False)
+    subject = Column(String(500), nullable=False)
+    status = Column(String(50), nullable=False)  # 'sent', 'failed', 'bounced'
+    sent_at = Column(DateTime, nullable=True)
+    
+    # Tracking for reminders
+    reminder_sent_at = Column(DateTime, nullable=True)
+    
+    # Related entities
+    related_booking_id = Column(Integer, ForeignKey('bookings.id', ondelete='SET NULL'), nullable=True)
+    related_form_id = Column(Integer, ForeignKey('form_templates.id', ondelete='SET NULL'), nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    workspace = relationship("Workspace")
+    contact = relationship("Contact")
+    booking = relationship("Booking")
+    form = relationship("FormTemplate")
+    
 class AutomationTrigger(str, enum.Enum):
     LEAD_CAPTURED = "lead_captured"
     BOOKING_CREATED = "booking_created"
@@ -196,7 +223,7 @@ class Booking(Base):
     name = Column(Text)
     cancellation_reason = Column(Text)
     confirmation_sent_at = Column(DateTime)
-    reminder_sent_at = Column(DateTime)
+    reminder_sent_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

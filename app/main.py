@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from app.jobs.email_reminder_job import run_email_reminder_job
 from app.core.config import settings
 from app.core.database import init_db
 from app.api.endpoints import router
@@ -30,12 +32,28 @@ app.add_middleware(
 # Include API router
 app.include_router(router, prefix=settings.API_PREFIX)
 
+
+scheduler = AsyncIOScheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown_scheduler():
+    scheduler.shutdown()
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database on startup"""
     logger.info("Initializing database...")
     init_db()
     logger.info("Database initialized!")
+    
+    scheduler.add_job(
+        run_email_reminder_job,
+        'interval',
+        hours=1,  # Run every hour
+        id='email_reminders'
+    )
+    scheduler.start()
 
 @app.get("/")
 async def root():

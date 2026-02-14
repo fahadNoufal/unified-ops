@@ -109,17 +109,30 @@ class ContactCreate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     notes: Optional[str] = None
-    source: Optional[str] = "api"
+    source: Optional[str] = "manual"
 
 class ContactUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     notes: Optional[str] = None
+    
+
+# class ContactResponse(BaseModel):
+#     id: int
+#     name: str
+#     email: str
+#     phone: Optional[str]
+#     source: str
+#     notes: Optional[str]
+#     created_at: datetime
+    
+#     class Config:
+#         from_attributes = True
 
 class ContactResponse(BaseModel):
     id: int
-    workspace_id: int
+    workspace_id: Optional[int]
     name: str
     email: Optional[str]
     phone: Optional[str]

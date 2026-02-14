@@ -145,6 +145,7 @@ class DummyDataGenerator:
                     {"id": "field_3", "type": "phone", "label": "Phone", "required": False},
                     {"id": "field_4", "type": "textarea", "label": "Message", "required": False},
                     {"id": "field_5", "type": "date", "label": "Preferred Booking Date", "required": True},
+                    
                 ]
             },
             {
@@ -245,7 +246,7 @@ class DummyDataGenerator:
         services = self.generate_services(db)
         print(f"✓ Created {len(services)} services")
         
-        bookings = self.generate_bookings(db, contacts, services, count=20)
+        bookings = self.generate_bookings(db, contacts, services, count=30)
         print(f"✓ Created {len(bookings)} bookings")
         
         templates = self.generate_form_templates(db)

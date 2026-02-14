@@ -2,8 +2,11 @@
 Comprehensive API Endpoints for Unified Operations Platform
 All routes in one file for simplicity
 """
+from app.api import analytics_operations
+from app.api import public_chat 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.orm import Session
+from app.services.email_service import email_service
 from sqlalchemy import func, and_, or_
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -24,12 +27,14 @@ from app.models.models import (
     AuditLog
 )
 from app.schemas.schemas import *
-from app.services.email_service import email_service
 from app.services.automation_service import automation_service
 from app.services.dummy_data import DummyDataGenerator
 from app.core.config import settings
 
 router = APIRouter()
+
+router.include_router(analytics_operations.router, tags=["analytics"])
+router.include_router(public_chat.router, tags=["public-chat"])
 
 # ========== AUTH ENDPOINTS ==========
 
@@ -146,6 +151,25 @@ async def update_workspace(
     db.commit()
     db.refresh(workspace)
     return workspace
+
+@router.put("/workspace", response_model=WorkspaceResponse)
+async def update_workspace(
+    data: WorkspaceUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    workspace = db.query(Workspace).filter(
+        Workspace.id == current_user.workspace_id
+    ).first()
+    
+    # This should handle email_api_key automatically
+    for key, value in data.dict(exclude_unset=True).items():
+        setattr(workspace, key, value)
+    
+    db.commit()
+    db.refresh(workspace)
+    return workspace
+
 
 @router.post("/workspaces/activate")
 async def activate_workspace(
@@ -351,27 +375,101 @@ async def list_contacts(
 
 @router.post("/contacts", response_model=ContactResponse)
 async def create_contact(
-    data: ContactCreate,
+    contact_data: ContactCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Create contact"""
-    contact = Contact(workspace_id=current_user.workspace_id, **data.dict())
-    db.add(contact)
-    db.flush()
+    """
+    Create a new contact/lead manually
     
-    conversation = Conversation(contact_id=contact.id)
-    db.add(conversation)
+    This is used when business users manually add a lead from the Leads page.
+    The lead will appear in the "Pending" status until they book an appointment.
     
-    tracking = LeadTracking(contact_id=contact.id)
-    db.add(tracking)
+    - **name**: Contact's full name (required)
+    - **email**: Contact's email address (required, must be unique per workspace)
+    - **phone**: Contact's phone number (optional)
+    - **source**: Where the lead came from (defaults to "manual")
+    - **notes**: Any additional notes about the contact (optional)
+    """
     
+    # Check if contact with this email already exists in this workspace
+    existing_contact = db.query(Contact).filter(
+        Contact.workspace_id == current_user.workspace_id,
+        Contact.email == contact_data.email
+    ).first()
+    
+    workspace = db.query(Workspace).filter(Workspace.id == current_user.workspace_id).first()
+    
+    if existing_contact:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A contact with email '{contact_data.email}' already exists in your workspace"
+        )
+    
+    # Create the new contact
+    new_contact = Contact(
+        workspace_id=current_user.workspace_id,
+        name=contact_data.name,
+        email=contact_data.email,
+        phone=contact_data.phone,
+        source=contact_data.source or "manual",
+        notes=contact_data.notes
+    )
+    
+    db.add(new_contact)
+    db.flush()  # Flush to get the ID
+    
+    existing_conversation = db.query(Conversation).filter(
+        Conversation.contact_id == new_contact.id
+    ).first()
+    
+    if not existing_conversation:
+        print(f"📧 Creating conversation for contact {new_contact.id}")
+        conversation = Conversation(
+            contact_id=new_contact.id,
+            last_message_at=datetime.utcnow(),
+            unread_count=0,
+            is_active=True,
+            created_at=datetime.utcnow()
+        )
+        db.add(conversation)
     db.commit()
-    db.refresh(contact)
+    db.refresh(new_contact)
+    # ==============================================
     
-    await automation_service.trigger_lead_captured(db, contact)
+    try:
+        
+        await email_service.send_welcome_email(
+            db=db,
+            contact=new_contact,
+            workspace=workspace
+        )
+        print("Welcome email sent successfully")
+    except Exception as e:
+        print(f"Failed to send welcome email: {e}")
     
-    return contact
+    # # Create a conversation for this contact
+    # conversation = Conversation(
+    #     contact_id=new_contact.id
+    # )
+    # db.add(conversation)
+    
+    # Create lead tracking entry (optional - if you have this model)
+    try:
+        tracking = LeadTracking(
+            contact_id=new_contact.id,
+            status="pending"
+        )
+        db.add(tracking)
+    except Exception as e:
+        # If LeadTracking model doesn't exist, skip this
+        print(f"Lead tracking not created: {e}")
+    
+    # Commit all changes
+    db.commit()
+    db.refresh(new_contact)
+    
+    return new_contact
 
 @router.get("/contacts/{contact_id}", response_model=ContactResponse)
 async def get_contact(
@@ -487,25 +585,49 @@ async def create_booking(
         Service.id == data.service_id,
         Service.workspace_id == current_user.workspace_id
     ).first()
+    workspace = db.query(Workspace).filter(Workspace.id == current_user.workspace_id).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
     
+    contact_id = None
+    
+    if not contact_id and data.contact_email:
+        # Look up contact by email (primary key within workspace)
+        contact = db.query(Contact).filter(
+            Contact.workspace_id == current_user.workspace_id,
+            Contact.email == data.contact_email
+        ).first()
+        
+        if contact:
+            # Contact exists - UPDATE with latest info (latest wins)
+            if data.contact_name:
+                contact.name = data.contact_name
+            if data.contact_phone:
+                contact.phone = data.contact_phone
+            contact.updated_at = datetime.utcnow()
+            contact_id = contact.id
+        else:
+            # Create new contact
+            contact = Contact(
+                workspace_id=current_user.workspace_id,
+                name=data.contact_name or "Customer",
+                email=data.contact_email,
+                phone=data.contact_phone,
+                source="booking"
+            )
+            db.add(contact)
+            db.flush()
+            contact_id = contact.id
+            
     end_time = data.start_time + timedelta(minutes=service.duration_minutes)
     
-    new_contact = Contact(
-        workspace_id=current_user.workspace_id,
-        name=data.contact_name,
-        email=data.contact_email
-    )
-    db.add(new_contact)
-
     # 2. This pushes the contact to Postgres and populates new_contact.id
     db.flush() 
 
     # 3. Use that generated ID for the booking
     booking = Booking(
         workspace_id=current_user.workspace_id,
-        contact_id=new_contact.id,
+        contact_id=contact_id,
         service_id=data.service_id,
         start_time=data.start_time,
         end_time=end_time,
@@ -515,6 +637,15 @@ async def create_booking(
     db.add(booking)
     db.commit()
     db.refresh(booking)
+    
+    try:
+        await email_service.send_booking_confirmation(
+            db=db,
+            booking=booking,
+            contact=contact,
+            workspace=workspace                )
+    except Exception as e:
+        print(f"Failed to send booking confirmation: {e}")
     
     await automation_service.trigger_booking_created(db, booking)
     
@@ -969,6 +1100,39 @@ async def update_email_template(
 
 # ========== PUBLIC FORM DISPLAY & SUBMISSION ==========
 
+
+@router.get("/public/forms/lookup/{workspace_slug}")
+async def lookup_form_by_name(
+    workspace_slug: str,
+    name: str = Query(..., desc="Contact Information Form"),
+    db: Session = Depends(get_db)
+):
+    """Find a form's ID based on its name and workspace slug"""
+    print('__________________>',name)
+    # 1. Find Workspace
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_slug).first()
+    if not workspace:
+        # Fallback: try lookup by ID if slug fails (in case slug is actually an ID)
+        if workspace_slug.isdigit():
+             workspace = db.query(Workspace).filter(Workspace.id == int(workspace_slug)).first()
+    
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # 2. Find Form with matching name (Case Insensitive)
+    form = db.query(FormTemplate).filter(
+        FormTemplate.workspace_id == workspace.id,
+        FormTemplate.is_active == True,
+        FormTemplate.name.ilike(f"%{name}%") # Matches "Contact Information Form", "contact information form", etc.
+    ).first()
+
+    if not form:
+        raise HTTPException(status_code=404, detail=f"Form '{name}' not found")
+
+    return {"form_id": form.id, "form_name": form.name}
+
+
+
 @router.get("/public/forms/{workspace_slug}/{form_id}")
 async def get_public_form(
     workspace_slug: str,
@@ -1043,9 +1207,14 @@ async def submit_public_form(
         raise HTTPException(status_code=404, detail="Form not found")
     
     # Extract contact info from submission
-    contact_email = submission_data.get('email')
-    contact_name = submission_data.get('name', 'Anonymous')
-    contact_phone = submission_data.get('phone')
+    # contact_email = submission_data.get('mail')
+    contact_email = next((v for k, v in submission_data.items() if 'email' in k.lower()), None)
+    contact_name = next((v for k, v in submission_data.items() if 'name' in k.lower()), 'Anonymous')
+    contact_phone = next((v for k, v in submission_data.items() if 'phone' in k.lower()), None)
+    
+    # contact_name = submission_data.get('name', 'Anonymous')
+    # contact_phone = submission_data.get('phone')
+    
     
     # Find or create contact
     contact = None
@@ -1073,6 +1242,16 @@ async def submit_public_form(
             # Create lead tracking
             tracking = LeadTracking(contact_id=contact.id, status="form_submitted")
             db.add(tracking)
+            
+            try:
+                await email_service.send_welcome_email(
+                    db=db,
+                    contact=contact,
+                    workspace=workspace
+                )
+            except Exception as e:
+                print(f"Failed to send welcome email: {e}")
+                
     else:
         # No email - create anonymous contact
         contact = Contact(
@@ -1202,7 +1381,7 @@ async def get_form_analytics(
         "pending_count": pending,
         "opened_count": opened,
         "completion_rate": round((completed / total * 100), 1) if total > 0 else 0,
-        "open_rate": round((opened / total * 100), 1) if total > 0 else 0,
+        "open_rate": round((opened / total * 100), 1) if total > 0 else 100,
         "avg_time_to_submit_hours": avg_time_to_submit
     }
 
@@ -1373,6 +1552,16 @@ async def create_public_booking(
         
         tracking = LeadTracking(contact_id=contact.id)
         db.add(tracking)
+        
+        try:
+            await email_service.send_booking_confirmation(
+                db=db,
+                booking=booking,
+                contact=contact,
+                workspace=workspace
+            )
+        except Exception as e:
+            print(f"Failed to send booking confirmation: {e}")
     
     end_time = data.start_time + timedelta(minutes=service.duration_minutes)
     
@@ -1392,6 +1581,9 @@ async def create_public_booking(
     await automation_service.trigger_booking_created(db, booking)
     
     return {"message": "Booking created", "booking_id": booking.id}
+
+
+
 
 # Logging FORM OPENED
 @router.get("/public/forms/{token}")
@@ -2087,7 +2279,15 @@ async def submit_public_form(
             Contact.email == contact_email
         ).first()
         
-        if not contact:
+        if contact:
+            # Contact exists - UPDATE with latest info (latest wins)
+            if contact_name and contact_name != 'Anonymous':
+                contact.name = contact_name
+            if contact_phone:
+                contact.phone = contact_phone
+            contact.updated_at = datetime.utcnow()
+        else:
+            # Create new contact
             contact = Contact(
                 workspace_id=workspace.id,
                 name=contact_name,
@@ -2096,7 +2296,7 @@ async def submit_public_form(
                 source="form_submission"
             )
             db.add(contact)
-            db.flush()
+        db.flush()
     
     # Create form submission
     submission = FormSubmission(
@@ -2545,6 +2745,7 @@ async def get_dashboard_analytics(
 
 # ========== TODAY'S BOOKING DETAILED VIEW ==========
 
+
 @router.get("/bookings/today/detailed", response_model=List[dict])
 async def get_todays_bookings_detailed(
     current_user: User = Depends(get_current_user),
@@ -2573,29 +2774,61 @@ async def get_todays_bookings_detailed(
             FormSubmission.contact_id == contact.id
         ).order_by(FormSubmission.submitted_at.desc()).all()
         
+        # Process form submissions with better structure
         submissions_data = []
+        combined_bio_data = {}  # NEW: Organize data by form type
+        
         for submission in form_submissions:
             form_template = db.query(FormTemplate).filter(
                 FormTemplate.id == submission.form_template_id
             ).first()
             
-            # Extract media/file uploads from submission data
-            media_files = []
-            if submission.submission_data:
-                for key, value in submission.submission_data.items():
-                    if key.lower().endswith(('_file', '_upload', '_image', '_document')):
-                        media_files.append({
-                            'field_name': key,
-                            'value': value
-                        })
+            if not form_template:
+                continue
             
+            # Extract submission data
+            submission_data = submission.submission_data or {}
+            
+            # Separate media files from regular fields
+            media_files = []
+            regular_fields = {}
+            
+            for key, value in submission_data.items():
+                # Check if it's a file/media field
+                if key.lower().endswith(('_file', '_upload', '_image', '_document', '_photo')):
+                    media_files.append({
+                        'field_name': key.replace('_', ' ').title(),
+                        'original_field': key,
+                        'value': value
+                    })
+                else:
+                    regular_fields[key] = value
+            
+            # Add to combined bio data organized by form
+            if regular_fields:
+                if form_template.name not in combined_bio_data:
+                    combined_bio_data[form_template.name] = {
+                        'form_type': form_template.form_type.value,
+                        'submitted_at': submission.submitted_at,
+                        'fields': []
+                    }
+                
+                # Convert fields to array for better display
+                for field_key, field_value in regular_fields.items():
+                    combined_bio_data[form_template.name]['fields'].append({
+                        'label': field_key.replace('_', ' ').title(),
+                        'key': field_key,
+                        'value': field_value
+                    })
+            
+            # Add to submissions list
             submissions_data.append({
                 'id': submission.id,
-                'form_name': form_template.name if form_template else 'Unknown Form',
-                'form_type': form_template.form_type if form_template else None,
+                'form_name': form_template.name,
+                'form_type': form_template.form_type.value,
                 'submitted_at': submission.submitted_at,
                 'status': submission.status.value,
-                'data': submission.submission_data,
+                'data': regular_fields,
                 'media_files': media_files
             })
         
@@ -2605,13 +2838,16 @@ async def get_todays_bookings_detailed(
             Booking.id != booking.id
         ).order_by(Booking.start_time.desc()).limit(5).all()
         
-        history_data = [{
-            'id': b.id,
-            'service_name': db.query(Service).filter(Service.id == b.service_id).first().name if b.service_id else None,
-            'start_time': b.start_time,
-            'status': b.status.value,
-            'notes': b.notes
-        } for b in booking_history]
+        history_data = []
+        for b in booking_history:
+            hist_service = db.query(Service).filter(Service.id == b.service_id).first()
+            history_data.append({
+                'id': b.id,
+                'service_name': hist_service.name if hist_service else 'Unknown Service',
+                'start_time': b.start_time,
+                'status': b.status.value,
+                'notes': b.notes
+            })
         
         # Calculate customer stats
         total_bookings = db.query(func.count(Booking.id)).filter(
@@ -2637,9 +2873,10 @@ async def get_todays_bookings_detailed(
             'notes': booking.notes,
             'service': {
                 'id': service.id if service else None,
-                'name': service.name if service else None,
-                'duration': service.duration_minutes if service else None,
-                'location': service.location if service else None,
+                'name': service.name if service else 'Unknown Service',
+                'duration': service.duration_minutes if service else 0,
+                'location': getattr(service, 'location', None) if service else None,
+                'price': getattr(service, 'price', None) if service else None,
             },
             
             # Contact details
@@ -2653,7 +2890,10 @@ async def get_todays_bookings_detailed(
                 'created_at': contact.created_at,
             },
             
-            # Form submissions
+            # NEW: Combined bio data organized by form
+            'combined_bio_data': combined_bio_data,
+            
+            # Form submissions (detailed)
             'form_submissions': submissions_data,
             
             # Booking history
@@ -2671,6 +2911,5 @@ async def get_todays_bookings_detailed(
         })
     
     return result
-
 
 
