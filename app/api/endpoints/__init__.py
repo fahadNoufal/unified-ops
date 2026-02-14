@@ -5,8 +5,8 @@ All routes in one file for simplicity
 from app.api import analytics_operations
 from app.api import public_chat 
 from app.api import agent_config  # At top
-
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from app.core.database import SessionLocal
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, BackgroundTasks 
 from sqlalchemy.orm import Session
 from app.services.email_service import email_service
 from sqlalchemy import func, and_, or_
@@ -27,18 +27,22 @@ from app.models.models import (
     InventoryItem, InventoryType, InventoryTransaction, EmailTemplate,
     EmailTemplateType, Message, MessageChannel, Conversation,
     LeadTracking, AutomationRule, ServiceFormLink, ServiceInventoryLink,
-    AuditLog
+    AuditLog,EmailConnection
 )
 from app.schemas.schemas import *
 from app.services.automation_service import automation_service
 from app.services.dummy_data import DummyDataGenerator
 from app.core.config import settings
+from ..email_connection_endpoints import router as email_connection_router
+from app.services.email_integration_service import email_integration_service
+
 
 router = APIRouter()
 
 router.include_router(analytics_operations.router, tags=["analytics"])
 router.include_router(public_chat.router, tags=["public-chat"])
 router.include_router(agent_config.router, tags=["agent-config"])  # With other routers
+router.include_router(email_connection_router,prefix="/api",tags=["email-connection"])
 
 # ========== AUTH ENDPOINTS ==========
 
@@ -984,6 +988,7 @@ async def get_conversation(
 async def send_message(
     conversation_id: int,
     data: MessageCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -1019,6 +1024,22 @@ async def send_message(
             html_body=data.content,
             workspace=current_user.workspace
         )
+        
+    if data.channel == 'email' and contact.email:
+        email_connection = db.query(EmailConnection).filter(
+            EmailConnection.workspace_id == current_user.workspace_id,
+            EmailConnection.is_active == True
+        ).first()
+        
+        if email_connection:
+            background_tasks.add_task(
+                send_email_reply_background,
+                workspace_id=current_user.workspace_id,
+                to_email=contact.email,
+                subject=f"Re: {contact.name}",
+                content=data.content,
+                message_id=message.id
+            )
     
     return message
 
@@ -2993,3 +3014,260 @@ async def get_todays_bookings_detailed(
     return result
 
 
+# EMAIL TEST
+@router.get("/email-connection", response_model=EmailConnectionResponse)
+async def get_email_connection(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get current email connection settings"""
+    connection = db.query(EmailConnection).filter(
+        EmailConnection.workspace_id == current_user.workspace_id
+    ).first()
+    
+    if not connection:
+        raise HTTPException(status_code=404, detail="No email connection configured")
+    
+    return connection
+
+
+@router.post("/email-connection/test")
+async def test_email_connection(
+    data: EmailConnectionTest,
+    current_user: User = Depends(get_current_user)
+):
+    """Test email connection without saving"""
+    result = email_integration_service.test_connection(
+        email_address=data.email,
+        password=data.password,
+        imap_host=data.imap_host,
+        imap_port=data.imap_port,
+        smtp_host=data.smtp_host,
+        smtp_port=data.smtp_port
+    )
+    
+    return result
+
+
+@router.post("/email-connection", response_model=EmailConnectionResponse)
+async def save_email_connection(
+    data: EmailConnectionCreate,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Save or update email connection"""
+    
+    # Test connection first
+    test_result = email_integration_service.test_connection(
+        email_address=data.email,
+        password=data.password,
+        imap_host=data.imap_host,
+        imap_port=data.imap_port,
+        smtp_host=data.smtp_host,
+        smtp_port=data.smtp_port
+    )
+    
+    if not test_result['success']:
+        raise HTTPException(
+            status_code=400,
+            detail=test_result.get('error', 'Connection test failed')
+        )
+    
+    # Check if connection exists
+    connection = db.query(EmailConnection).filter(
+        EmailConnection.workspace_id == current_user.workspace_id
+    ).first()
+    
+    if connection:
+        # Update existing
+        connection.provider = data.provider
+        connection.email = data.email
+        connection.password = data.password  # Should be encrypted in production
+        connection.imap_host = data.imap_host
+        connection.imap_port = data.imap_port
+        connection.smtp_host = data.smtp_host
+        connection.smtp_port = data.smtp_port
+        connection.is_active = data.is_active
+    else:
+        # Create new
+        connection = EmailConnection(
+            workspace_id=current_user.workspace_id,
+            provider=data.provider,
+            email=data.email,
+            password=data.password,  # Should be encrypted in production
+            imap_host=data.imap_host,
+            imap_port=data.imap_port,
+            smtp_host=data.smtp_host,
+            smtp_port=data.smtp_port,
+            is_active=data.is_active
+        )
+        db.add(connection)
+    
+    db.commit()
+    db.refresh(connection)
+    
+    # Trigger initial sync in background
+    if connection.is_active:
+        background_tasks.add_task(
+            sync_emails_background,
+            workspace_id=current_user.workspace_id
+        )
+    
+    return connection
+
+
+@router.delete("/email-connection")
+async def disconnect_email(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Disconnect email account"""
+    connection = db.query(EmailConnection).filter(
+        EmailConnection.workspace_id == current_user.workspace_id
+    ).first()
+    
+    if not connection:
+        raise HTTPException(status_code=404, detail="No connection to disconnect")
+    
+    db.delete(connection)
+    db.commit()
+    
+    return {"success": True, "message": "Email disconnected"}
+
+
+@router.post("/email-connection/sync")
+async def sync_emails_now(
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Trigger immediate email sync"""
+    connection = db.query(EmailConnection).filter(
+        EmailConnection.workspace_id == current_user.workspace_id,
+        EmailConnection.is_active == True
+    ).first()
+    
+    if not connection:
+        raise HTTPException(status_code=404, detail="No active email connection")
+    
+    # Add sync task to background
+    background_tasks.add_task(
+        sync_emails_background,
+        workspace_id=current_user.workspace_id
+    )
+    
+    return {"success": True, "message": "Email sync started"}
+
+
+# ========== BACKGROUND TASKS ==========
+
+from datetime import datetime, timedelta
+
+def sync_emails_background(workspace_id: int):
+    """Background task to sync emails"""
+    
+    # Create a new database session specifically for this thread
+    db = SessionLocal()
+    
+    try:
+        connection = db.query(EmailConnection).filter(
+            EmailConnection.workspace_id == workspace_id,
+            EmailConnection.is_active == True
+        ).first()
+        
+        if not connection:
+            return
+        
+        # OPTIMIZATION: Only fetch emails from the last 24 hours
+        # This makes the background task much faster and lighter
+        yesterday = datetime.utcnow() - timedelta(days=1)
+        
+        # Pass the date limit to your service
+        count = email_integration_service.fetch_new_emails(
+            db, 
+            connection, 
+            since_date=yesterday  # <--- Add this argument
+        )
+        
+        if count > 0:
+            print(f"✅ Synced {count} new emails for workspace {workspace_id}")
+        
+    except Exception as e:
+        print(f"❌ Email sync failed for workspace {workspace_id}: {str(e)}")
+    finally:
+        # Always close the session to prevent DB connection leaks
+        db.close()
+        
+
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# ... other imports ...
+
+def send_via_smtp(connection, to_email: str, subject: str, content: str) -> bool:
+    """
+    Standalone function to send email via SMTP.
+    Used by background tasks to send replies.
+    """
+    try:
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['From'] = connection.email
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        
+        # Add body
+        html_content = content.replace('\n', '<br>')
+        text_part = MIMEText(content, 'plain')
+        html_part = MIMEText(f'<html><body>{html_content}</body></html>', 'html')
+        
+        msg.attach(text_part)
+        msg.attach(html_part)
+        
+        # Send via SMTP
+        # Note: Ensure connection object has these attributes
+        server = smtplib.SMTP(connection.smtp_host, connection.smtp_port)
+        server.starttls()
+        server.login(connection.email, connection.password)
+        server.send_message(msg)
+        server.quit()
+        
+        print(f"✅ SMTP Email sent to {to_email}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error sending email via SMTP: {str(e)}")
+        return False
+    
+def send_email_reply_background(
+    workspace_id: int,
+    to_email: str,
+    subject: str,
+    content: str,
+    message_id: int
+):
+    """Sends email in background"""
+    db = SessionLocal()  # New session
+    
+    try:
+        # Get email connection
+        connection = db.query(EmailConnection).filter(
+            EmailConnection.workspace_id == workspace_id,
+            EmailConnection.is_active == True
+        ).first()
+        
+        if connection:
+            # Send email
+            success = send_via_smtp(connection, to_email, subject, content)
+            
+            if success:
+                # Mark message as sent
+                message = db.query(Message).filter(Message.id == message_id).first()
+                message.email_sent = True
+                db.commit()
+    finally:
+        db.close()  #
+        
+        

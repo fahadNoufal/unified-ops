@@ -481,3 +481,41 @@ class PublicLeadCreate(BaseModel):
 # ===== INTEGRATION TEST =====
 class EmailTestRequest(BaseModel):
     test_email: EmailStr
+    
+class EmailConnectionCreate(BaseModel):
+    provider: str  # 'gmail' or 'outlook'
+    email: EmailStr
+    password: str
+    imap_host: str
+    imap_port: int
+    smtp_host: str
+    smtp_port: int
+    is_active: bool = True
+
+
+class EmailConnectionResponse(BaseModel):
+    id: int
+    workspace_id: int
+    provider: str
+    email: str
+    imap_host: str
+    imap_port: int
+    smtp_host: str
+    smtp_port: int
+    is_active: bool
+    last_sync_at: Optional[datetime]
+    sync_status: Optional[str]
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class EmailConnectionTest(BaseModel):
+    provider: str
+    email: EmailStr
+    password: str
+    imap_host: str
+    imap_port: int
+    smtp_host: str
+    smtp_port: int

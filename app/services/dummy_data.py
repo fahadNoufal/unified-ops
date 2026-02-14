@@ -141,10 +141,10 @@ class DummyDataGenerator:
                 "description": "Basic contact information",
                 "fields": [
                     {"id": "field_1", "type": "text", "label": "Full Name", "required": True},
-                    {"id": "field_2", "type": "email", "label": "Email", "required": True},
+                    # {"id": "field_2", "type": "email", "label": "Email", "required": True},
                     {"id": "field_3", "type": "phone", "label": "Phone", "required": False},
+                    {"id": "field_5", "type": "date", "label": "How did you know about us?", "required": True},
                     {"id": "field_4", "type": "textarea", "label": "Message", "required": False},
-                    {"id": "field_5", "type": "date", "label": "Preferred Booking Date", "required": True},
                     
                 ]
             },

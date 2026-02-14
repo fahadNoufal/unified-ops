@@ -14,4 +14,5 @@ python-dotenv==1.0.0
 langgraph
 langchain-core
 numpy
+re
 google-genai

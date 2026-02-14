@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.jobs.email_reminder_job import run_email_reminder_job
+from app.jobs.email_sync_job import sync_all_email_accounts
 from app.core.config import settings
 from app.core.database import init_db
 from app.api.endpoints import router
@@ -53,7 +54,14 @@ async def startup_event():
         hours=1,  # Run every hour
         id='email_reminders'
     )
+    scheduler.add_job(
+        sync_all_email_accounts,
+        'interval',
+        minutes=1,
+        id='email_sync'
+    )
     scheduler.start()
+    print("✅ Email sync scheduler started")
 
 @app.get("/")
 async def root():

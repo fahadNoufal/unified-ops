@@ -138,6 +138,8 @@ class Workspace(Base):
     inventory_items = relationship("InventoryItem", back_populates="workspace", cascade="all, delete-orphan")
     email_templates = relationship("EmailTemplate", back_populates="workspace", cascade="all, delete-orphan")
     automation_rules = relationship("AutomationRule", back_populates="workspace", cascade="all, delete-orphan")
+    email_connection = relationship("EmailConnection", back_populates="workspace", uselist=False, cascade="all, delete-orphan")
+
     
     rag_content = Column(Text, nullable=True)
     agent_system_prompt = Column(Text, nullable=True)
@@ -193,7 +195,46 @@ class Message(Base):
     
     conversation = relationship("Conversation", back_populates="messages")
     sender = relationship("User", back_populates="messages_sent")
+    
+    email_message_id = Column(String(255), nullable=True, index=True)
+    email_subject = Column(String(500), nullable=True)
+    email_sent = Column(Boolean, default=False)
 
+
+class EmailConnection(Base):
+    """
+    Stores email account connection details for a workspace
+    Allows businesses to connect Gmail/Outlook accounts
+    """
+    __tablename__ = "email_connections"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    workspace_id = Column(Integer, ForeignKey('workspaces.id', ondelete='CASCADE'), nullable=False, unique=True)
+    
+    # Provider info
+    provider = Column(String(50), nullable=False)  # 'gmail' or 'outlook'
+    email = Column(String(255), nullable=False)
+    password = Column(String(500), nullable=False)  # Should be encrypted in production!
+    
+    # IMAP settings (for receiving)
+    imap_host = Column(String(255), nullable=False)
+    imap_port = Column(Integer, nullable=False)
+    
+    # SMTP settings (for sending)
+    smtp_host = Column(String(255), nullable=False)
+    smtp_port = Column(Integer, nullable=False)
+    
+    # Status
+    is_active = Column(Boolean, default=True)
+    last_sync_at = Column(DateTime, nullable=True)
+    sync_status = Column(String(255), nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    workspace = relationship("Workspace", back_populates="email_connection")
 # Service model
 class Service(Base):
     __tablename__ = "services"
