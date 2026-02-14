@@ -18,7 +18,7 @@ export default defineConfig(({ command }) => {
       port: 5173,
       proxy: {
         '/api': {
-          target: 'http://localhost:8000',
+          target: 'https://endoscopic-unbluffed-philip.ngrok-free.dev',
           changeOrigin: true,
         },
       },
