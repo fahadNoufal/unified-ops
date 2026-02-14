@@ -15,10 +15,14 @@ const queryClient = new QueryClient({
   },
 })
 
+// ✅ FIX: Use the variable you defined
+const basename = import.meta.env.BASE_URL 
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      {/* ✅ FIX: Pass 'basename', not 'repoName' */}
+      <BrowserRouter basename={basename}>
         <App />
       </BrowserRouter>
     </QueryClientProvider>
